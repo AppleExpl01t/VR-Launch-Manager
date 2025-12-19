@@ -64,3 +64,9 @@ npm run build
 3. Set delays (Gear icon) if apps need time to load.
 4. Click **Start All** to launch your VR setup reliably.
 5. If something crashes, it auto-restarts (if enabled).
+
+<br/>
+<div align="center">
+  <img src="./public/icon.png" width="128" alt="VR Launch Manager Logo" />
+</div>
+
