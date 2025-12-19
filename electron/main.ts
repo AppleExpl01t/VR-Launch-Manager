@@ -94,7 +94,7 @@ function createWindow() {
     height: 700,
     minWidth: 800,
     minHeight: 600,
-    icon: path.join(process.env.VITE_PUBLIC, 'electron-vite.svg'),
+    icon: path.join(process.env.VITE_PUBLIC, 'icon.png'),
     frame: false, // Custom UI
     transparent: true, // Glass effect
     backgroundColor: '#00000000', // Transparent bg

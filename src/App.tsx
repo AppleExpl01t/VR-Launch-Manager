@@ -279,10 +279,10 @@ function App() {
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', padding: '16px', boxSizing: 'border-box', gap: '16px' }}>
 
       {/* Header */}
-      <header className="glass-panel" style={{ padding: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', WebkitAppRegion: 'drag' } as any}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <div style={{ width: '10px', height: '10px', background: 'var(--color-neon-cyan)', borderRadius: '50%', boxShadow: '0 0 10px var(--color-neon-cyan)' }}></div>
-          <h1 className="text-glow-cyan" style={{ fontSize: '1.5rem', letterSpacing: '2px' }}>VR LAUNCH MGR</h1>
+      <header className="glass-panel" style={{ padding: '12px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', WebkitAppRegion: 'drag' } as any}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
+          <img src="/icon.png" alt="Logo" style={{ width: '64px', height: '64px', filter: 'drop-shadow(0 0 8px var(--color-neon-cyan))' }} />
+          <h1 className="text-glow-cyan" style={{ fontSize: '1.8rem', letterSpacing: '3px', fontWeight: 'bold' }}>VR LAUNCH MGR</h1>
         </div>
         <div style={{ display: 'flex', gap: '10px', alignItems: 'center', WebkitAppRegion: 'no-drag' } as any}>
           <div style={{ marginRight: '10px', display: 'flex', alignItems: 'center', gap: '5px' }}>
