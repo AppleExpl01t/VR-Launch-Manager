@@ -145,23 +145,53 @@ function createWindow() {
     const appName = fileName.replace(/\.(lnk|exe|url)$/, '')
     const settings = appSettings.get(appName) || {}
 
+    // Unified Launch Logic Variables
     let executablePath = appPath
     let isExecutable = appPath.toLowerCase().endsWith('.exe')
+    let spawnOptions: any = { detached: true, stdio: 'ignore' }
+    let spawnArgs: string[] = []
 
-    // Try to resolve shortcut if it is a .lnk file
+    // 1. Resolve Shortcut if needed
     if (appPath.toLowerCase().endsWith('.lnk')) {
       try {
         const shortcut = shell.readShortcutLink(appPath)
-        if (shortcut.target && shortcut.target.toLowerCase().endsWith('.exe')) {
-          executablePath = shortcut.target
-          isExecutable = true
-          win?.webContents.send('console-log', `Resolved shortcut to: ${executablePath}`)
+        win?.webContents.send('console-log', `[SHORTCUT DEBUG] Target: '${shortcut.target}' Args: '${shortcut.args}' CWD: '${shortcut.cwd}'`)
+
+        if (shortcut.target) {
+          if (shortcut.target.toLowerCase().endsWith('.exe')) {
+            executablePath = shortcut.target
+            isExecutable = true
+            win?.webContents.send('console-log', `Resolved Target EXE: ${executablePath}`)
+          } else {
+            win?.webContents.send('console-log', `[WARNING] Shortcut target is not an .exe: ${shortcut.target}`)
+          }
+
+          if (shortcut.cwd) {
+            spawnOptions.cwd = shortcut.cwd
+          }
+
+          if (shortcut.args) {
+            // Heuristic argument parsing
+            const matchArgs = shortcut.args.match(/(?:[^\s"]+|"[^"]*")+/g)
+            if (matchArgs) {
+              spawnArgs = matchArgs.map(a => a.replace(/^"|"$/g, ''))
+            }
+          }
+        } else {
+          win?.webContents.send('console-log', `[ERROR] Shortcut has no target!`)
         }
-      } catch (e) {
+      } catch (e: any) {
         console.error('Failed to resolve shortcut', e)
+        win?.webContents.send('console-log', `[ERROR] Failed to read shortcut: ${e.message}`)
       }
     }
 
+    // Default CWD if missing
+    if (!spawnOptions.cwd && isExecutable) {
+      spawnOptions.cwd = path.dirname(executablePath)
+    }
+
+    win?.webContents.send('console-log', `Final Launch Config -> Exe: ${executablePath}, CWD: ${spawnOptions.cwd}, Args: ${JSON.stringify(spawnArgs)}`)
 
     // Global Error Handler to prevent crashes
     process.on('uncaughtException', (error) => {
@@ -169,10 +199,9 @@ function createWindow() {
       win?.webContents.send('console-log', `[SYSTEM ERROR] ${error.message}`)
     })
 
-    // ... inside launch-app handler
     if (isExecutable) {
       try {
-        const child = spawn(executablePath, [], { detached: true, stdio: 'ignore' })
+        const child = spawn(executablePath, spawnArgs, spawnOptions)
 
         // EACCES Handling (Admin Rights Required)
         child.on('error', (err: any) => {
@@ -180,7 +209,22 @@ function createWindow() {
             win?.webContents.send('console-log', `[PERMISSION DENIED] requesting elevated privileges...`)
 
             // Fallback: Runas via PowerShell
-            const psCommand = `Start-Process -FilePath "${executablePath}" -WorkingDirectory "${path.dirname(executablePath)}" -Verb RunAs`
+            // Construct arguments for Start-Process
+            let psArgs = `-FilePath "${executablePath}"`
+            if (spawnOptions.cwd) {
+              psArgs += ` -WorkingDirectory "${spawnOptions.cwd}"`
+            }
+            if (spawnArgs.length > 0) {
+              // Re-escape for PowerShell
+              const joinedArgs = spawnArgs.map(a => `\\"${a}\\"`).join(' ')
+              psArgs += ` -ArgumentList "${joinedArgs}"`
+            }
+
+            psArgs += ` -Verb RunAs`
+
+            win?.webContents.send('console-log', `[ELEVATED DEBUG] Command: Start-Process ${psArgs}`)
+
+            const psCommand = `Start-Process ${psArgs}`
             const elevator = spawn('powershell', ['-Command', psCommand], { detached: true, stdio: 'ignore' })
 
             elevator.on('error', (e) => {
@@ -211,10 +255,8 @@ function createWindow() {
               if (settings.autoRestart) {
                 win?.webContents.send('console-log', `[AUTO-RESTART] Restarting ${appName} in 3 seconds...`)
                 setTimeout(() => {
-                  // Recursive restart (using original function would be cleaner, but simple spawn here works for now)
-                  // NOTE: For robust auto-restart of Admin apps, we'd need to re-trigger the main launch logic. 
-                  // For now this handles standard crashes. Admin apps crashing might need manual restart if PID is lost.
-                  const newChild = spawn(executablePath, [], { detached: true, stdio: 'ignore' })
+                  // Recursive restart using same variables
+                  const newChild = spawn(executablePath, spawnArgs, spawnOptions)
                   newChild.unref()
                   runningProcesses.set(appPath, newChild)
                   win?.webContents.send('app-status-change', { path: appPath, status: 'running (restarted)' })
