@@ -1,5 +1,7 @@
 # VR Launch Manager
 
+> **New to coding?** [Click here for a step-by-step guide on how to build and install this app easily.](./INSTALL_GUIDE.md)
+
 A specialized, high-performance application launcher designed to manage the startup sequence of Virtual Reality (VR) middleware, utilities, and games. 
 
 Launchers for VR setups often require specific boot orders, delays, and robust crash recovery. **VR Launch Manager** solves this by providing a unified, "Glassmorphism" styled interface to organize, monitor, and control your VR ecosystem.
