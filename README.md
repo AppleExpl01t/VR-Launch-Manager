@@ -4,7 +4,7 @@ A specialized, high-performance application launcher designed to manage the star
 
 Launchers for VR setups often require specific boot orders, delays, and robust crash recovery. **VR Launch Manager** solves this by providing a unified, "Glassmorphism" styled interface to organize, monitor, and control your VR ecosystem.
 
-![Preview](./public/icon.png)
+![Preview](./public/preview.png)
 
 ## Features
 
