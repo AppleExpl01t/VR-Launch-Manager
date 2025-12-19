@@ -162,72 +162,171 @@ function createWindow() {
       }
     }
 
+
+    // Global Error Handler to prevent crashes
+    process.on('uncaughtException', (error) => {
+      console.error('Uncaught Exception:', error)
+      win?.webContents.send('console-log', `[SYSTEM ERROR] ${error.message}`)
+    })
+
+    // ... inside launch-app handler
     if (isExecutable) {
-      const child = spawn(executablePath, [], { detached: true, stdio: 'ignore' })
-      child.unref()
+      try {
+        const child = spawn(executablePath, [], { detached: true, stdio: 'ignore' })
 
-      runningProcesses.set(appPath, child)
-      win?.webContents.send('app-status-change', { path: appPath, status: 'running' })
+        // EACCES Handling (Admin Rights Required)
+        child.on('error', (err: any) => {
+          if (err.code === 'EACCES') {
+            win?.webContents.send('console-log', `[PERMISSION DENIED] requesting elevated privileges...`)
 
-      child.on('exit', (code) => {
-        runningProcesses.delete(appPath)
-        win?.webContents.send('app-status-change', { path: appPath, status: 'stopped' })
+            // Fallback: Runas via PowerShell
+            const psCommand = `Start-Process -FilePath "${executablePath}" -WorkingDirectory "${path.dirname(executablePath)}" -Verb RunAs`
+            const elevator = spawn('powershell', ['-Command', psCommand], { detached: true, stdio: 'ignore' })
 
-        if (code !== 0 && code !== null) {
-          win?.webContents.send('console-log', `App crashed or exited: ${appPath} (Code: ${code})`)
+            elevator.on('error', (e) => {
+              win?.webContents.send('console-log', `[FATAL] Failed to elevate: ${e.message}`)
+            })
 
-          if (settings.autoRestart) {
-            win?.webContents.send('console-log', `[AUTO-RESTART] Restarting ${appName} in 3 seconds...`)
-            setTimeout(() => {
-              const newChild = spawn(executablePath, [], { detached: true, stdio: 'ignore' })
-              newChild.unref()
-              runningProcesses.set(appPath, newChild)
-              win?.webContents.send('app-status-change', { path: appPath, status: 'running (restarted)' })
-
-              win?.webContents.send('console-log', `[SYSTEM] Restarted ${appName}.`)
-            }, 3000)
+            win?.webContents.send('app-status-change', { path: appPath, status: 'launched (elevated)' })
+            // We lose PID tracking here, but at least the app launches.
+            return;
           }
-        } else {
-          win?.webContents.send('console-log', `App exited normally: ${appPath}`)
-        }
-      })
+          win?.webContents.send('console-log', `Launch Error: ${err.message}`)
+        })
 
-      return { success: true, pid: child.pid }
+        child.unref()
+
+        // Only track if it didn't error immediately (approx. check)
+        if (child.pid) {
+          runningProcesses.set(appPath, child)
+          win?.webContents.send('app-status-change', { path: appPath, status: 'running' })
+
+          child.on('exit', (code) => {
+            runningProcesses.delete(appPath)
+            win?.webContents.send('app-status-change', { path: appPath, status: 'stopped' })
+
+            if (code !== 0 && code !== null) {
+              win?.webContents.send('console-log', `App crashed or exited: ${appPath} (Code: ${code})`)
+
+              if (settings.autoRestart) {
+                win?.webContents.send('console-log', `[AUTO-RESTART] Restarting ${appName} in 3 seconds...`)
+                setTimeout(() => {
+                  // Recursive restart (using original function would be cleaner, but simple spawn here works for now)
+                  // NOTE: For robust auto-restart of Admin apps, we'd need to re-trigger the main launch logic. 
+                  // For now this handles standard crashes. Admin apps crashing might need manual restart if PID is lost.
+                  const newChild = spawn(executablePath, [], { detached: true, stdio: 'ignore' })
+                  newChild.unref()
+                  runningProcesses.set(appPath, newChild)
+                  win?.webContents.send('app-status-change', { path: appPath, status: 'running (restarted)' })
+
+                  win?.webContents.send('console-log', `[SYSTEM] Restarted ${appName}.`)
+                }, 3000)
+              }
+            } else {
+              win?.webContents.send('console-log', `App exited normally: ${appPath}`)
+            }
+          })
+
+          return { success: true, pid: child.pid }
+        }
+      } catch (err: any) {
+        return { success: false, message: err.message }
+      }
     } else {
       shell.openPath(appPath)
       return { success: true, message: 'Launched via Shell. Monitoring restricted to exe files.' }
     }
   })
 
-  ipcMain.handle('kill-app', (_event, appPath) => {
+  ipcMain.handle('kill-app', async (_event, appPath) => {
     let killed = false
 
     // 1. Try killing by tracked PID
     const child = runningProcesses.get(appPath)
     if (child && child.pid) {
-      treeKill(child.pid, 'SIGKILL', (err) => {
-        if (err) {
-          win?.webContents.send('console-log', `Failed to kill linked process: ${err.message}`)
-        } else {
-          win?.webContents.send('console-log', `Killed linked process (PID: ${child.pid})`)
-        }
-      })
-      killed = true
+      try {
+        await new Promise<void>((resolve, reject) => {
+          treeKill(child.pid!, 'SIGKILL', (err) => {
+            if (err) reject(err)
+            else resolve()
+          })
+        })
+        win?.webContents.send('console-log', `Killed linked process (PID: ${child.pid})`)
+        killed = true
+      } catch (e: any) {
+        win?.webContents.send('console-log', `Failed to kill linked process: ${e.message}`)
+      }
     }
 
     // 2. Try killing by Process Name (Taskkill)
+    // Priority: User Configured Name > Auto-Derived Name
     const fileName = path.basename(appPath)
     const appName = fileName.replace(/\.(lnk|exe|url)$/, '')
     const settings = appSettings.get(appName)
 
-    if (settings && settings.processName) {
-      win?.webContents.send('console-log', `Attempting taskkill for: ${settings.processName}`)
-      spawn('taskkill', ['/IM', settings.processName, '/F'], { detached: true, stdio: 'ignore' }).unref()
-      killed = true
+    let targetProcessName = settings && settings.processName ? settings.processName : ''
+
+    // Auto-Derive if empty
+    if (!targetProcessName && fileName.toLowerCase().endsWith('.exe')) {
+      targetProcessName = fileName
+    } else if (!targetProcessName && fileName.toLowerCase().endsWith('.lnk')) {
+      // Try to derive from original shortcut target if possible
+      try {
+        const shortcut = shell.readShortcutLink(appPath)
+        if (shortcut.target && shortcut.target.toLowerCase().endsWith('.exe')) {
+          targetProcessName = path.basename(shortcut.target)
+        }
+      } catch { }
+    }
+
+    if (targetProcessName) {
+      win?.webContents.send('console-log', `Attempting taskkill for: ${targetProcessName}`)
+
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const killProc = spawn('taskkill', ['/IM', targetProcessName, '/F'], { detached: false })
+
+          let stderr = ''
+          killProc.stderr.on('data', d => stderr += d.toString())
+
+          killProc.on('close', (code) => {
+            if (code === 0) {
+              win?.webContents.send('console-log', `Standard kill successful for ${targetProcessName}`)
+              killed = true
+              resolve()
+            } else if (stderr.includes('Access is denied') || code === 5) {
+              // 3. Elevated Fallback
+              win?.webContents.send('console-log', `[ACCESS DENIED] Standard kill failed. Attempting ELEVATED kill...`)
+
+              // We use Start-Process with Verb RunAs to trigger UAC
+              const psCommand = `Start-Process taskkill -ArgumentList "/F /IM ${targetProcessName}" -Verb RunAs`
+              const elevator = spawn('powershell', ['-Command', psCommand], { stdio: 'ignore' })
+
+              elevator.on('error', (e) => {
+                win?.webContents.send('console-log', `Failed to elevate kill command: ${e.message}`)
+                resolve()
+              })
+
+              elevator.on('close', () => {
+                win?.webContents.send('console-log', `Elevated kill command sent.`)
+                killed = true
+                resolve()
+              })
+            } else {
+              if (!stderr.includes('not found')) {
+                win?.webContents.send('console-log', `Taskkill failed: ${stderr.trim()}`)
+              }
+              resolve()
+            }
+          })
+        })
+      } catch (e: any) {
+        console.error(e)
+      }
     }
 
     if (!killed) {
-      win?.webContents.send('console-log', `Unable to kill ${appName}: No running process tracked and no Process Name configured.`)
+      win?.webContents.send('console-log', `Unable to kill ${appName}: No running process tracked and name derivation failed.`)
       return false
     }
 
